@@ -34,10 +34,12 @@
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <termios.h>
+#include <time.h>
 #include <unistd.h>
 
 /*** defines ***/
@@ -83,6 +85,8 @@ struct editorConfig { // структура конфигурации
     int numrows;
     erow *row;
     char *filename; // имя файла
+    char statusmsg[80];
+    time_t statusmsg_time;
     struct termios orig_termios;    // исходные атрибуты терминала
 };
 
@@ -456,6 +460,15 @@ void editorDrawStatusBar(struct abuf *ab) {
         }
     }
     abAppend(ab, "\x1b[m", 3); // переключает обратно на нормальное форматирование
+    abAppend(ab, "\r\n", 2);
+}
+
+void editorDrawMessageBar(struct abuf *ab) {
+    abAppend(ab, "\x1b[K", 3);  // очистить строку. K (Стереть в строке) - стирает часть текущей строки
+    int msglen = strlen(E.statusmsg);
+    if (msglen > E.screencols) msglen = E.screencols;
+    if (msglen && time(NULL) - E.statusmsg_time < 5)    // если время выполнения команды меньше 5 секунд то вывести сообщение
+        abAppend(ab, E.statusmsg, msglen);
 }
 
 void editorRefreshScreen() {
@@ -478,6 +491,7 @@ void editorRefreshScreen() {
 
     editorDrawRows(&ab);
     editorDrawStatusBar(&ab);
+    editorDrawMessageBar(&ab);
 
     char buf[32];
     /* Форматирует строку с escape-последовательностью для перемещения курсора в позицию (E.cy + 1, E.rx + 1) 
@@ -497,6 +511,19 @@ void editorRefreshScreen() {
 
     write(STDOUT_FILENO, ab.b, ab.len); //  запись в терминал
     abFree(&ab);
+}
+
+void editorSetStatusMessage(const char *fmt, ...) {
+    /* 
+        Устанавливает сообщение о состоянии, 
+        форматируя ввод с использованием списка переменных аргументов и 
+        сохраняя его в E.statusmsg вместе с текущим временем в E.statusmsg_time. 
+    */
+    va_list ap; // список аргументов
+    va_start(ap, fmt);  // инициализация списка аргументов
+    vsnprintf(E.statusmsg, sizeof(E.statusmsg), fmt, ap);   // печатает форматированный список аргументов в E.statusmsg
+    va_end(ap);
+    E.statusmsg_time = time(NULL);
 }
 
 /*** input ***/
@@ -600,9 +627,11 @@ void initEditor() {
     E.numrows = 0;
     E.row = NULL;
     E.filename = NULL;
+    E.statusmsg[0] = '\0';
+    E.statusmsg_time = 0;
 
     if (getWindowSize(&E.screenrows, &E.screencols) == -1) die("getWindowSize");
-    E.screenrows -= 1;
+    E.screenrows -= 2;
 }
 
 int main(int argc, char *argv[]) {
@@ -612,6 +641,8 @@ int main(int argc, char *argv[]) {
     if (argc >= 2) {
         editorOpen(argv[1]);
     }
+
+    editorSetStatusMessage("HELP: CTRL-Q = quit");
 
     while (1) {
         editorRefreshScreen();
